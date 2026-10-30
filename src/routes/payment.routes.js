@@ -1,22 +1,31 @@
-// // src/routes/payment.routes.js
+import express from "express";
 
-// import express from "express";
+import {
+  wallet,
+  purchasePayment,
+  verifyPayment,
+  transactionHistory,
+  reciept,
+  interTransfer,
+  outerTransfer,
+  withdrawal,
+} from "../controllers/payment.controller.js";
 
-// import {
-//   initializePayment,
-//   verifyPayment,
-// } from "../controllers/payment.controller.js";
+import { authProtect } from "../middleware/auth.middleware.js";
 
-// import { authProtect } from "../middleware/auth.middleware.js";
+const router = express.Router();
 
-// const router = express.Router();
+router.use(authProtect);
 
-// router.use(authProtect);
+router.post("/wallet", wallet);
+router.post("/purchase", purchasePayment);
 
-// // Start payment
-// router.post("/initialize", initializePayment);
+router.get("/verify/:reference", verifyPayment);
+router.get("/transactions", transactionHistory);
+router.get("/receipt/:reference", reciept);
 
-// // Verify payment
-// router.get("/verify/:reference", verifyPayment);
+router.post("/transfers/internal", interTransfer);
+router.post("/transfers/external", outerTransfer);
+router.post("/withdrawals", withdrawal);
 
-// export default router;
+export default router;

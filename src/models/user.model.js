@@ -2,55 +2,86 @@ import mongoose from "mongoose";
 
 const userSchema = new mongoose.Schema(
   {
+    // User information
     fullName: {
       type: String,
-      required: true,
+      required: [true, "Full name is required"],
       trim: true,
+      minlength: [2, "Full name must contain at least 2 characters"],
     },
-    // fullName: {
-    //   firstName: { type: String, required: true, trim: true },
-    //   lastName: { type: String, required: true, trim: true },
-    // },
-    // phoneNumber: {
-    //   type: String,
-    //   required: true,
-    //   unique: true,
-    //   trim: true,
-    //   index: true,
-    // },
-    // phoneNumber: {
-    //   e164: { type: String, required: true, unique: true, trim: true, index:true },
-    //   countryIso: { type: String, required: true },
-    //   countryCode: { type: String, required: true },
-    //   isVerified: { type: Boolean, default: false },
-    //   verrifiedAt: { type: Date },
-    // },
+
     email: {
       type: String,
-      required: true,
+      required: [true, "Email is required"],
       unique: true,
       lowercase: true,
+      trim: true,
+      index: true,
     },
-    isEmailVerified: {
-      type: Boolean,
-      default: false,
-    },
-    emailVerifiedAt: {
-      type: Date,
-    },
+
     password: {
       type: String,
-      required: true,
+      required: [true, "Password is required"],
       select: false,
     },
 
+    // User role
     role: {
       type: String,
       enum: ["user", "admin"],
       default: "user",
     },
+
+    // Email verification
+    isEmailVerified: {
+      type: Boolean,
+      default: false,
+    },
+
+    emailVerifiedAt: {
+      type: Date,
+      default: null,
+    },
+
+    verificationTokenHash: {
+      type: String,
+      select: false,
+      default: undefined,
+    },
+
+    verificationTokenExpiresAt: {
+      type: Date,
+      select: false,
+      default: undefined,
+    },
+
+    // Password reset
+    passwordResetTokenHash: {
+      type: String,
+      select: false,
+      default: undefined,
+    },
+
+    passwordResetTokenExpiresAt: {
+      type: Date,
+      select: false,
+      default: undefined,
+    },
   },
-  { timestamps: true },
+  {
+    timestamps: true,
+  },
 );
 
-export default mongoose.model("User", userSchema);
+// Normalize email before saving
+userSchema.pre("save", function () {
+  if (this.isModified("email")) {
+    this.email = this.email.trim().toLowerCase();
+  }
+
+  return;
+});
+
+const User = mongoose.model("User", userSchema);
+
+export default User;

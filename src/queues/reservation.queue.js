@@ -1,14 +1,15 @@
-// src/queues/queue.js
-
 import { Queue } from "bullmq";
-import { redis } from "../../payment/src/config/redis.js";
+import { redisConnection } from "../config/redis.js";
 
-// Release reserved stock if payment isn't completed
-export const reservationQueue = new Queue("reservation-expiry", {
-  connection: redis,
+export const paymentQueue = new Queue("zanzelle-payments", {
+  connection: redisConnection,
+  defaultJobOptions: {
+    attempts: 5,
+    backoff: {
+      type: "exponential",
+      delay: 2000,
+    },
+    removeOnComplete: false,
+    removeOnFail: false,
+  },
 });
-
-// // Process payment-related jobs
-// export const paymentQueue = new Queue("payment-events", {
-//   connection: redis,
-// });

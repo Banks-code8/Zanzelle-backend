@@ -1,120 +1,155 @@
-// // src/workers/payment.worker.js
+// src/workers/payment.worker.js
 
-// import { Worker } from "bullmq";
+import { Worker } from "bullmq";
 
-// import { redis } from "../../payment/src/config/redis.js";
+import { redisConnection } from "../config/redis.js";
 
-// import Cart from "../models/cart.model.js";
-// import Order from "../models/order.model.js";
-// import Payment from "../models/payment.model.js";
+import Payment from "../models/payment.model.js";
+import WebhookEvent from "../models/webhookEvent.model.js";
 
-// import {
-//   confirmStockService,
-//   releaseStockService,
-// } from "../services/inventory.service.js";
+import { processSuccessfulPayment } from "../services/payment-processing.service.js";
 
-// const paymentWorker = new Worker(
-//   "payment-events",
-//   async (job) => {
-//     const { event, data } = job.data;
+const QUEUE_NAME = "zanzelle-payments";
+const MAX_ATTEMPTS = 5;
 
-//     try {
-//       const payment = await Payment.findOne({
-//         reference: data.reference,
-//       });
+const paymentWorker = new Worker(
+  QUEUE_NAME,
+  async (job) => {
+    const { webhookEventId, event, data } = job.data;
 
-//       if (!payment) {
-//         console.log(`Payment ${data.reference} not found.`);
-//         return;
-//       }
+    if (!webhookEventId || !event || !data?.reference) {
+      throw new Error("Invalid payment webhook job payload");
+    }
 
-//       const order = await Order.findById(payment.orderId);
+    // Load the persisted webhook event.
+    const webhookEvent = await WebhookEvent.findById(webhookEventId);
 
-//       if (!order) {
-//         console.log(`Order ${payment.orderId} not found.`);
-//         return;
-//       }
+    if (!webhookEvent) {
+      throw new Error(`Webhook event ${webhookEventId} not found`);
+    }
 
-//       switch (event) {
-//         case "charge.success": {
-//           payment.status = "success";
-//           payment.gatewayResponse = data;
-//           await payment.save();
+    // Idempotency: do not process an already completed event again.
+    if (
+      webhookEvent.processed ||
+      webhookEvent.processingStatus === "processed"
+    ) {
+      return { skipped: true, reason: "Already processed" };
+    }
 
-//           order.paymentStatus = "paid";
-//           order.orderStatus = "processing";
-//           await order.save();
+    webhookEvent.processingStatus = "processing";
+    webhookEvent.attempts += 1;
+    webhookEvent.processingError = null;
+    await webhookEvent.save();
 
-//           // Confirm reserved stock
-//           await Promise.all(
-//             order.items.map((item) =>
-//               confirmStockService(item.productId, item.quantity),
-//             ),
-//           );
+    try {
+      const payment = await Payment.findOne({
+        reference: data.reference,
+        provider: "paystack",
+      });
 
-//           // Clear user's cart
-//           await Cart.findOneAndUpdate(
-//             { userId: order.userId },
-//             {
-//               items: [],
-//               totalItems: 0,
-//               totalPrice: 0,
-//             },
-//           );
+      if (!payment) {
+        throw new Error(`Payment ${data.reference} not found`);
+      }
 
-//           console.log(`✅ Payment successful: ${payment.reference}`);
+      // Ignore events that this worker does not handle.
+      if (!["charge.success", "charge.failed"].includes(event)) {
+        webhookEvent.processed = true;
+        webhookEvent.processingStatus = "processed";
+        webhookEvent.processedAt = new Date();
+        await webhookEvent.save();
 
-//           break;
-//         }
+        return { skipped: true, reason: `Unhandled event: ${event}` };
+      }
 
-//         case "charge.failed": {
-//           payment.status = "failed";
-//           payment.gatewayResponse = data;
-//           await payment.save();
+      // Confirm that the event's transaction matches our payment.
+      if (
+        data.reference !== payment.reference ||
+        Number(data.amount) !== Math.round(payment.amount * 100) ||
+        data.currency !== payment.currency
+      ) {
+        throw new Error(
+          `Payment validation failed for reference ${payment.reference}`,
+        );
+      }
 
-//           order.paymentStatus = "failed";
-//           order.orderStatus = "cancelled";
-//           await order.save();
+      if (event === "charge.success") {
+        if (data.status !== "success") {
+          throw new Error("Paystack success event has a non-success status");
+        }
 
-//           // Release reserved stock
-//           await Promise.all(
-//             order.items.map((item) =>
-//               releaseStockService(item.productId, item.quantity),
-//             ),
-//           );
+        // Never downgrade a previously successful payment.
+        if (payment.status === "failed") {
+          throw new Error(
+            `Payment ${payment.reference} is already marked failed; investigate before changing it`,
+          );
+        }
 
-//           console.log(`❌ Payment failed: ${payment.reference}`);
+        if (payment.status !== "success") {
+          // This service MUST apply the wallet credit or bill-purchase
+          // fulfillment idempotently before returning successfully.
+          await processSuccessfulPayment(payment, data);
 
-//           break;
-//         }
+          payment.status = "success";
+          payment.gatewayResponse = data;
+          await payment.save();
+        }
+      }
 
-//         default:
-//           console.log(`⚠️ Unhandled payment event: ${event}`);
-//       }
-//     } catch (error) {
-//       console.error("Payment Worker Error:", error);
-//       throw error;
-//     }
-//   },
-//   {
-//     connection: redis,
-//   },
-// );
+      if (event === "charge.failed") {
+        // A late failure event must not overwrite a successful payment.
+        if (payment.status !== "success" && payment.status !== "failed") {
+          payment.status = "failed";
+          payment.gatewayResponse = data;
+          await payment.save();
+        }
+      }
 
-// paymentWorker.on("ready", () => {
-//   console.log("✅ Payment Worker is ready");
-// });
+      webhookEvent.processed = true;
+      webhookEvent.processingStatus = "processed";
+      webhookEvent.processingError = null;
+      webhookEvent.processedAt = new Date();
+      await webhookEvent.save();
 
-// paymentWorker.on("completed", (job) => {
-//   console.log(`✅ Payment Job ${job.id} completed`);
-// });
+      return {
+        success: true,
+        reference: payment.reference,
+        event,
+      };
+    } catch (error) {
+      webhookEvent.processingStatus =
+        job.attemptsMade + 1 >= MAX_ATTEMPTS ? "failed" : "pending";
 
-// paymentWorker.on("failed", (job, err) => {
-//   console.error(`❌ Payment Job ${job?.id} failed`, err);
-// });
+      webhookEvent.processingError = error.message;
+      await webhookEvent.save();
 
-// paymentWorker.on("error", (err) => {
-//   console.error("❌ Payment Worker Error:", err);
-// });
+      console.error(
+        `Zanzelle payment processing failed for ${data.reference}:`,
+        error,
+      );
 
-// export default paymentWorker;
+      throw error;
+    }
+  },
+  {
+    connection: redisConnection,
+    concurrency: 5,
+  },
+);
+
+paymentWorker.on("ready", () => {
+  console.log("Zanzelle payment worker is ready");
+});
+
+paymentWorker.on("completed", (job, result) => {
+  console.log(`Payment job ${job.id} completed`, result);
+});
+
+paymentWorker.on("failed", (job, error) => {
+  console.error(`Payment job ${job?.id} failed:`, error.message);
+});
+
+paymentWorker.on("error", (error) => {
+  console.error("Zanzelle payment worker error:", error);
+});
+
+export default paymentWorker;
