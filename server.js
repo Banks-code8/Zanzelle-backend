@@ -2,7 +2,7 @@ import express from "express";
 import cors from "cors";
 import "./src/config/env.js";
 // import "./payment/src/config/redis.js";
-
+import { verifyMailer } from "./src/config/mailer.js";
 // Database
 import connectDB from "./src/config/db.js";
 
@@ -82,11 +82,12 @@ const PORT = process.env.PORT || 5000;
 const startServer = async () => {
   try {
     await connectDB();
+    await verifyMailer();
 
     app.listen(PORT, () => {
       console.log("✅ MongoDB Connected");
-      console.log("✅ Redis Connected");
-      console.log(`🚀 Server running on port ${PORT}`);
+      console.log("✅ Mailer Connected");
+      console.log("🚀 Server running on port", PORT);
     });
   } catch (error) {
     console.error("❌ Failed to start server");
@@ -94,5 +95,7 @@ const startServer = async () => {
     process.exit(1);
   }
 };
+
+startServer();
 
 startServer();
