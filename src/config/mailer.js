@@ -24,16 +24,10 @@
 
 // export default transporter;
 import nodemailer from "nodemailer";
-console.log({
-  host: process.env.SMTP_HOST,
-  port: process.env.SMTP_PORT,
-  secure: process.env.SMTP_SECURE,
-  user: process.env.SMTP_USER,
-  passwordExists: Boolean(process.env.SMTP_PASS),
-});
+
 const transporter = nodemailer.createTransport({
   host: process.env.SMTP_HOST || "smtp.gmail.com",
-  port: Number(process.env.SMTP_PORT || 465),
+  port: Number(process.env.SMTP_PORT),
   secure: process.env.SMTP_SECURE === "true",
 
   auth: {
